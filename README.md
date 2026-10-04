@@ -46,6 +46,7 @@ cd frontend
 npm install
 npm run dev        # http://localhost:21815
 npm run build      # 类型检查 + 生产构建
+npm test           # vitest：合并计划 / 断点恢复 / 包解析
 ```
 
 > 本地开发无需任何后端服务或环境变量。
@@ -62,13 +63,13 @@ sologsb-1115/
 │   ├── tailwind.config.js / postcss.config.js
 │   ├── public/favicon.svg
 │   └── src/
-│       ├── types/              # specimen.ts / site.ts / storage.ts / determination.ts / index.ts
+│       ├── types/              # specimen.ts / site.ts / storage.ts / determination.ts / merge.ts / index.ts
 │       ├── stores/             # specimenStore / siteStore / storageStore / determinationStore（Zustand）
 │       ├── components/common/  # SpecimenCard / StatusTag / CabinetGrid / SitePicker
 │       ├── hooks/              # usePersistentStore / useSpecimenFilter
-│       ├── pages/              # SpecimensPage / SitesPage / CollectPage / DeterminationPage / StoragePage
+│       ├── pages/              # SpecimensPage / SitesPage / CollectPage / DeterminationPage / StoragePage / HandoffPage
 │       ├── router/index.tsx
-│       └── utils/              # codec.ts / export.ts / id.ts
+│       └── utils/              # codec.ts / export.ts / id.ts / handoff.ts / mergePlan.ts / mergeApply.ts
 ```
 
 ## 五、数据模型与存储
@@ -80,8 +81,9 @@ sologsb-1115/
 | Storage 保藏位置 | 保藏方式、柜/抽屉/盒/插位序号、入柜日期、经手人 | `storages` |
 | Determination 鉴定记录 | 鉴定人、日期、结论（学名）、依据文献、置信度、是否需复核 | `determinations` |
 
-- 数据库名 `gbinsectlog`，`meta` 表保存 `schemaVersion`；
+- 数据库名 `gbinsectlog`，`meta` 表保存 `schemaVersion` 与同步基线 `syncBase`；
 - `version(2)` 升级迁移会为历史标本补齐默认采集方式（扫网）；
+- `version(3)` 新增 `mergeJobs` 合并批次表，支撑交接包合并的断点恢复；
 - 标本编号规则：`采集地代码-年份-流水号`（如 `QLB-2026-0007`），提交时自动分配并查重；
 - 数据仅存于浏览器本地，容器无状态、不挂载命名卷。
 
@@ -94,10 +96,22 @@ sologsb-1115/
 | `/sites` | 采集地管理：经纬度格式校验、各地采集次数统计、50 米内邻近采集地提示与一键合并 |
 | `/determination` | 鉴定工作流：待鉴定队列逐条处理，落鉴定记录并自动推进标本状态（已鉴定 / 待复核） |
 | `/storage` | 保藏柜位图：柜-抽屉-盒-位三级展开，空位/占用一目了然，拖拽入柜，重复占用给出占用提示 |
+| `/handoff` | 交接包合并：野外导出离线交接包，回馆三路合并入台账，冲突字段来源对照，断点可续 |
 
-## 七、业务约定
+## 七、交接包合并（离线协作）
+
+野外队与馆内各自离线工作，通过交接包 JSON 文件交换数据：
+
+1. **导出**：`/handoff` 页导出交接包，含四表全量与同步基线（上次同步点的行快照）；导出后本机基线推进到当前状态。
+2. **三路合并**：回馆导入时逐字段对比「基线 / 馆内 / 包内」——只有一边改过的字段自动接受；两边都改且值不同的字段列入来源对照表，人工选边（留馆内 / 用交接包）后才写入。
+3. **断点恢复**：合并计划先落 `mergeJobs` 表再逐条执行，每条应用后即记进度；写库中断可重试，已完成的不重跑，插入按业务键查重，不会重复建档或占两个柜位。
+4. **旧备份兼容**：没有同步基线的旧备份 JSON 同样可导入，差异字段全部列入对照表，需人工选边，绝不静默覆盖。
+
+## 八、业务约定
 
 - 采集地代码是标本编号前缀，代码重复会被拒绝；
 - 坐标 50 米内视为同一采集地，页面上给出合并提示，合并会把原采集地标本自动改挂；
 - 鉴定记录提交后自动把标本状态推进为「已鉴定」，勾选「需复核」则置为「待复核」；
-- 同一柜位（柜-屉-盒-位）只允许一份标本，冲突时列出已有标本编号。
+- 同一柜位（柜-屉-盒-位）只允许一份标本，冲突时列出已有标本编号；
+- 交接包合并时：采集地按代码与坐标（50 米内）认到同一处，代码以馆内为准；标本编号照旧，同编号即同一份；
+- 有未解决冲突的标本暂缓入柜，解决对照后再次执行才写入保藏位置。
