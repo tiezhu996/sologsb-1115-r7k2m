@@ -2,22 +2,25 @@ import { useStore } from 'zustand'
 import type { StoreApi, UseBoundStore } from 'zustand'
 import Dexie, { type Table } from 'dexie'
 import type { CollectSite, Determination, Specimen, Storage } from '@/types'
+import type { BaselineRow, MergeJob } from '@/types/merge'
 
 /** IndexedDB 数据结构版本号 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface MetaRow {
   key: string
   value: number
 }
 
-/** Dexie 封装：标本 / 采集地 / 保藏位置 / 鉴定记录 四张业务表 + 元数据表 */
+/** Dexie 封装：标本 / 采集地 / 保藏位置 / 鉴定记录 四张业务表 + 元数据 + 合并任务 + 出队基线 */
 class InsectLogDb extends Dexie {
   specimens!: Table<Specimen, string>
   sites!: Table<CollectSite, string>
   storages!: Table<Storage, string>
   determinations!: Table<Determination, string>
   meta!: Table<MetaRow, string>
+  mergeJobs!: Table<MergeJob, string>
+  baselines!: Table<BaselineRow, string>
 
   constructor() {
     super('gbinsectlog')
@@ -29,7 +32,7 @@ class InsectLogDb extends Dexie {
       meta: 'key'
     })
     // v2：新增「采集方式」字段，迁移时为历史标本补齐默认采集方式（扫网）
-    this.version(SCHEMA_VERSION)
+    this.version(2)
       .stores({
         specimens: 'id, code, order, family, status, siteId, collectDate',
         sites: 'id, code, name, habitat',
@@ -47,6 +50,16 @@ class InsectLogDb extends Dexie {
             }
           })
       })
+    // v3：离线交接包合并——新增合并任务（失败可恢复重试）与出队基线两张表，业务表结构不变
+    this.version(SCHEMA_VERSION).stores({
+      specimens: 'id, code, order, family, status, siteId, collectDate',
+      sites: 'id, code, name, habitat',
+      storages: 'id, specimenId, cabinet, drawer',
+      determinations: 'id, specimenId, determiner, date',
+      meta: 'key',
+      mergeJobs: 'id, status, createdAt',
+      baselines: 'key'
+    })
   }
 }
 
